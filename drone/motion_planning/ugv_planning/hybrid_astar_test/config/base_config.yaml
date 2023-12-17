@@ -1,0 +1,12 @@
+# vehicle
+vehicle_width: 2.2     
+vehicle_length: 4.58    
+vehicle_wheelbase: 2.7  
+vehicle_max_rudder: 35  
+
+# map
+vehicle_safe_distance: 0.5 
+map_resolution: 1.0        
+
+
+robot_environment: false
