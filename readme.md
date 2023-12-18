@@ -1,1 +1,1 @@
-使用RL训练Controller参数，用于控制UAV实现在Gazebo中实现视觉伺服效果
+使用RL训练Controller参数，用于控制UAV在Gazebo中实现视觉伺服效果
