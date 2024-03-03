@@ -1,1 +1,1 @@
-使用RL训练Controller参数，用于控制UAV在Gazebo中实现视觉伺服效果
+使用RL训练control/tracking_IBVS.py文件当中的鲁棒控制参数，用于控制UAV在Gazebo中实现视觉伺服效果
