@@ -1,1 +1,11 @@
-使用RL训练control/tracking_IBVS.py文件当中的鲁棒控制参数，用于控制UAV在Gazebo中实现视觉伺服效果
+### 如何创建新分支 
+```
+git clone <repository_url>
+cd <repository_name>
+git checkout -b <new_branch_name>
+# Make changes to files
+git add .
+git commit -m "Your commit message"
+git push origin <new_branch_name>
+
+```
