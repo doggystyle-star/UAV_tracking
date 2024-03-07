@@ -1,94 +1,22 @@
 import gym
 from gym import spaces
+import math
 import rospy
 import random
 import numpy as np
 import pyrealsense2 as rs
 from cv_bridge import CvBridge
-from std_msgs.msg import String,Header
 from sensor_msgs.msg import Image
 from pyquaternion import Quaternion
-from darknet_ros_msgs.msg import BoundingBoxes
+from detection_msgs.msg import BoundingBoxes
+from std_msgs.msg import String,Header, Float32
 from geometry_msgs.msg import Twist,TwistStamped,PoseStamped
+from controller import AccelerateController, PIDController
+from nine_msgs.msg import control
 import sys 
+from pyquaternion import Quaternion
 sys.path.append("/home/robot/firmware/catkin_ws/devel/lib/python3/dist-packages") 
-from APF_RL.gym_examples.envs import gazebo_env
 
-#PID控制器
-class PIDController():
-    def __init__(self, kp, ki, kd):
-        self.kp = kp
-        self.ki = ki
-        self.kd = kd
-        self.error_sum = 0.0
-        self.last_error = 0.0
-    def update(self, target, current, dt):
-        error  = target-current
-        self.error_sum += error * dt
-        error_diff = (error - self.last_error)/dt
-        #error_diff = (error - self.last_error)
-        output = self.kp * error +self.ki * self.error_sum + self.kd * error_diff
-        self.last_error = error
-        return output
-
-# 饱和函数（saturation function）
-def sat(x,u):
-    if x < -u:
-        return -u
-    elif x > u:
-        return u
-    else:
-        return x 
-
-# 双曲正切函数（tanh function）
-def tanh(x):
-    return np.tanh(x)
-
-#鲁棒控制器
-class AccelerateController():
-    def __init__(self, tao1, tao2, Et,Ua=0.0):
-        self.tao1 = tao1
-        self.tao2 = tao2
-        self.Et = Et
-        self.Sv = 0
-        self.Su = 0
-        self.Ua = Ua
-
-    def update_X(self,U_,dt,VL,PL):
-        #delta_Ua = -self.Et*(self.Sv - VL) + self.Su
-        #U = -1*self.tao2*(tanh(VL + self.tao1*PL)+tanh(VL)) - sat(delta_Ua,U_)
-        U = -1*self.tao2*(tanh(VL + self.tao1*PL)+tanh(VL))
-        acc = U
-        #acc = U + self.Ua
-        V_out = VL + acc*dt
-        #更新Sv和Su
-        Sv_1 = self.Sv - self.Et*(self.Sv - VL)*dt
-        Su_1 = self.Su - self.Et*(self.Su + U)*dt
-        self.Sv = Sv_1
-        self.Su = Su_1
-        return V_out
-    def update_Y(self,U_,dt,VL,PL):
-        delta_Ua = -1*self.Et*(self.Sv - VL) + self.Su
-        U =-self.tao2*(tanh(VL + self.tao1*PL)+tanh(VL)) - sat(delta_Ua,U_)
-        acc = U
-        V_out = VL + acc*dt
-        #更新Sv和Su
-        Sv_1 = self.Sv - self.Et*(self.Sv - VL)*dt
-        Su_1 = self.Su - self.Et*(self.Su + U - 9.8)*dt
-        self.Sv = Sv_1
-        self.Su = Su_1
-        return V_out
-    def update_Z(self,U_,dt,VL,PL):
-        delta_Ua = -1*self.Et*(self.Sv - VL) + self.Su
-        U = 9.8 - self.tao2*(tanh(VL + self.tao1*PL)+tanh(VL)) - sat(delta_Ua,U_)
-        acc = U - 9.8
-        V_out = VL + acc*dt
-        #更新Sv和Su
-        Sv_1 = self.Sv - self.Et*(self.Sv - VL)*dt
-        Su_1 = self.Su - self.Et*(self.Su + U - 9.8)*dt
-        self.Sv = Sv_1
-        self.Su = Su_1
-        return V_out
 bridge = CvBridge()
 
 def color_img_callback(msg):
@@ -108,14 +36,19 @@ def detact_distance(box,randnum):
     for i in range(randnum):
         bias = random.randint(-min_val//4, min_val//4)
         dist = depth_img[int(mid_pos[1] + bias), int(mid_pos[0] + bias)]
-        #cv2.circle(color_img (int(mid_pos[0] + bias), int(mid_pos[1] + bias)), 4, (255,0,0), -1)
-        #print(int(mid_pos[1] + bias), int(mid_pos[0] + bias))
+        # 绘制中心像素位置，仅用于调试
+        # cv2.circle(color_img (int(mid_pos[0] + bias), int(mid_pos[1] + bias)), 4, (255,0,0), -1)
         if dist:
             distance_list.append(dist)
     distance_list = np.array(distance_list)
-    distance_list = np.sort(distance_list)[randnum//2-randnum//4:randnum//2+randnum//4] #冒泡排序+中值滤波
+    distance_list = np.sort(distance_list)[randnum//2-randnum//4:randnum//2+randnum//4] #Timsort排序+中值滤波
     #print(distance_list, np.mean(distance_list))
-    return round(np.mean(distance_list),4)
+
+    # 加权深度距离
+    raw_distance = round(np.mean(distance_list),4)
+    distance = abs(0.9*raw_distance + 0.01*target_distance*((43**2+105**2)/((box.xmin-box.xmax)//2**2+(box.ymin-box.ymax)//2**2))**(1/2))
+    return distance
+
 def get_depth_frame():
     pipeline = rs.pipeline()
     config = rs.config()
@@ -149,40 +82,60 @@ def local_velocity_callback(msg):
     twiststamped.twist.angular.y = msg.twist.angular.y
     twiststamped.twist.angular.z = msg.twist.angular.z
     #print (twiststamped)
+def parameter_callback(msg):
+    global robust
+    robust.Kp_yaw = msg.Kp_yaw
+    robust.Ki_yaw = msg.Ki_yaw
+    robust.Kd_yaw = msg.Kd_yaw
+    robust.x_tao1 = msg.x_tao1
+    robust.x_tao2 = msg.x_tao2
+    robust.y_tao1 = msg.y_tao1
+    robust.y_tao2 = msg.y_tao2
+    robust.z_tao1 = msg.z_tao1
+    robust.z_tao2 = msg.z_tao2
+
 
 #返回z轴角速度和x加速度
 def darknet_callback(data):
-    global find_cnt, cmd, get_time, eval_distance, twist
+    global find_cnt, cmd, get_time, eval_distance, twist, depth_distance,u
     for box in data.bounding_boxes:
-        if(box.id == 0 ):
+        if(box.Class == "person" ):
         #if(box.id == 56 ):
             print("find human")
             eval_distance = detact_distance(box,48)
+
+            # 加入虚拟相平面
+            # 计算cos(pitch_angle)
+            eval_distance = eval_distance * math.cos(pitch) + height * math.sin(pitch)
+            
+            depth_distance = eval_distance 
             q_x = eval_distance - target_distance
-            print("深度期望为:",q_x)
+            print("深度距离为:",eval_distance)
             u = (box.xmax+box.xmin)/2
             #print("中心像素距离为:",u - ppx)
             v = (box.ymax+box.ymin)/2
-            # eval_distance = get_depth_frame().get_distance(u, v)
-            print("深度期望为：",eval_distance)
-            twist.angular.z = z_angvelocity.update(ppx/1000,u,Dt)
+            twist.angular.z = z_angvelocity.update(ppx,u,Dt)
             q_y = eval_distance*(u- ppx)/fx
             q_z = eval_distance*(v - ppy)/fy
             #WL = twiststamped.twist.angular.z
-
+            q_zz = height - target_height
             XVL=twiststamped.twist.linear.x
             YVL=twiststamped.twist.linear.y
             ZVL=twiststamped.twist.linear.z
             #print("x_velocity",VL,'\t')
-            twist.linear.x = x_accelerate.update_X(U_=0.5,dt=dDt,VL=XVL,PL=-q_x) 
+            twist.linear.x = x_accelerate.update_X(U_=0.5,dt=dDt,VL=XVL,PL=q_x) 
             twist.linear.y = y_accelerate.update_Y(U_=0.5,dt=dDt,VL=YVL,PL=q_y)#左手系
             #print(twiststamped.twist.linear.x)
-            VZ = z_accelerate.update_Z(U_=0.5,dt=Dt,VL=ZVL,PL=-q_z)
-            if VZ > 0:
-                twist.linear.z = z_accelerate.update_Z(U_=0.5,dt=Dt,VL=ZVL,PL=q_z)
-            else:
-                twist.linear.z = 0.001
+            VZ = z_accelerate.update_Z(U_=0.5,dt=Dt,VL=ZVL,PL=q_zz)
+            if not (is_over):
+                if VZ == "nan":
+                    twist.linear.z = -0.02
+                elif (is_bottom): twist.linear.z = 0.02
 
+                else:
+                    twist.linear.z = VZ
+            else:
+                twist.linear.z = -0.02
             #录制bag包  
             toast.twist.linear.x = u - ppx
             toast.twist.linear.y = v - ppy
@@ -191,33 +144,51 @@ def darknet_callback(data):
         else:
             twist.linear.x = 0
             twist.linear.y = 0
-            twist.linear.z = 0.001
+            twist.linear.z = 0.02
             #twist.angular.z = 0.5
 
 #返回z加速度
 def local_pose_callback(msg):
-    global height, target_height, target_set
+    global height, target_set, pitch, is_over, is_bottom
+    is_over = False
+    is_bottom = False
     height = msg.pose.position.z 
-    print('高度为： ',height)
-    # PH = height - target_height
-    # VL=twiststamped.twist.linear.z
-    # #print("z_velocity",VL)
-    # TwistStampe.twist.linear.z= z_accelerate.update_Z(U_=0.5,dt=Dt,VL=VL,PL=PH)
-    # if not target_set:
-    #     target_height = height     
-    #     target_set = True  
+    pitch = q2pitch(msg.pose.orientation)
+    if height > 1.8:
+        is_over = True
+    if height < 0.2:
+        is_bottom = True
+    # print('高度为： ',height)
+    # print('pitch: ', pitch)
+
+# 返回俯仰角
+def q2pitch(q):
+    # 如果输入是 Quaternion 类型，则直接获取俯仰角
+    if isinstance(q, Quaternion):
+        pitch_angle_rad = q.yaw_pitch_roll[1]
+    else:
+        # 如果输入不是 Quaternion 类型，先将其转换为 Quaternion 类型
+        q_ = Quaternion(q.w, q.x, q.y, q.z)
+        # 获取俯仰角
+        pitch_angle_rad = q_.yaw_pitch_roll[1]
+    return pitch_angle_rad
 
 if __name__ == "__main__":
 
     cmd = String()
     twiststamped =TwistStamped()
     twist = Twist()
+    robust = control()
     toast = TwistStamped()
+    depth_distance = Float32()
+    u = Float32()
     target_distance = 3
     target_height = 0.6
-    env = gazebo_env()
+    #env = RelativePosition(env) 
     ppx=318.482
     ppy=241.167
+    # fx = 384.39654541015625
+    # fy = 384.39654541015625
     fx = 616.591
     fy = 616.765
 
@@ -228,40 +199,9 @@ if __name__ == "__main__":
 
     find_cnt = 0
     height = 0
-    Dt = 0.01
+    Dt = 0.1
     dDt = 0.1
     eval_distance = 0
-    action = 2, 0.6, 2, 4, 0.0005, -0.01, -0.00002
-    #PID control
-    # Kp_yaw = -0.0005
-    # Ki_yaw = 0.01
-    # Kd_yaw = 0.00002
-    Kp_yaw = env.apply_action(action=action)[4]
-    Ki_yaw = env.apply_action(action=action)[5]
-    Kd_yaw = env.apply_action(action=action)[6]
-    z_angvelocity = PIDController(Kp_yaw,Ki_yaw,Kd_yaw)
-    #ACC control
-    ET = 0.1
-    # x_tao1 = 2 
-    # x_tao2 = 0.6
-    x_tao1 = 2
-    x_tao2 = 0.6
-    x_tao1 = env.apply_action(action=action)[0]
-    x_tao2 = env.apply_action(action=action)[1]
-    # y_tao1 = 2
-    # y_tao2 = 4
-    y_tao1 = env.apply_action(action=action)[2]
-    y_tao2 = env.apply_action(action=action)[3]
-
-    # z_tao1 = 0.05
-    # z_tao2 = 0.01
-    z_tao1 = 0.05
-    z_tao2 = 0.01
-
-    x_accelerate = AccelerateController(x_tao1,x_tao2,ET)
-    y_accelerate = AccelerateController(y_tao1,y_tao2,ET)
-    z_accelerate = AccelerateController(z_tao1,z_tao2,ET)
-
 
     rospy.init_node("yolo_human_tracking")
 
@@ -273,32 +213,63 @@ if __name__ == "__main__":
 
     rospy.Subscriber("/iris_0/mavros/local_position/pose", PoseStamped, callback = local_pose_callback,queue_size=1)
 
-    rospy.Subscriber("/uav_0/darknet_ros/bounding_boxes", BoundingBoxes, callback = darknet_callback,queue_size=1)
+    rospy.Subscriber("/yolov5/detections", BoundingBoxes, callback = darknet_callback,queue_size=1)
 
+    rospy.Subscriber("/iris_0/Gazeboworld/parameter_9", control,callback= parameter_callback, queue_size=1)
 
     cmd_vel_pub = rospy.Publisher('/xtdrone/iris_0/cmd_vel_flu', Twist, queue_size=1)
     cmd_pub = rospy.Publisher('/xtdrone/iris_0/cmd', String, queue_size=1)
     error_pub = rospy.Publisher('/xtdrone/iris_0/cmd_error',TwistStamped,queue_size=1)
-    rate = rospy.Rate(60) 
 
-    #header = Header()
-    #header.frame_id = "base_link"
+    distance_pub = rospy.Publisher('/iris_0/yolo/depth_distance', Float32, queue_size=1)
+
+    axis_pub = rospy.Publisher('iris_0/yolo/axis_u', Float32, queue_size=1)
+    rate = rospy.Rate(30) 
+
+        #PID control
+    # Kp_yaw = -0.0005
+    # Ki_yaw = 0.01
+    # Kd_yaw = 0.00002
+    z_angvelocity = PIDController(robust.Kp_yaw,robust.Ki_yaw,robust.Kd_yaw)
+    #ACC control
+    ET = 0.1
+    # x_tao1 = 2
+    # x_tao2 = 0.6
+
+    # y_tao1 = 2
+    # y_tao2 = 4
+
+    # z_tao1 = 0.05
+    # z_tao2 = 0.01
+
+    x_accelerate = AccelerateController(robust.x_tao1,robust.x_tao2,ET)
+    y_accelerate = AccelerateController(robust.y_tao1,robust.y_tao2,ET)
+    z_accelerate = AccelerateController(robust.z_tao1,robust.z_tao2,ET)
+
+    header = Header()
+    header.frame_id = "base_link"
     while not rospy.is_shutdown():
         rate.sleep()
         cmd_vel_pub.publish(twist)
-        print("twist_x:",twist.linear.x)
-        cmd_pub.publish(cmd)                
+        # print("twist_x:",twist.linear.x)
+        cmd_pub.publish(cmd)           
         error_pub.publish(toast)
-        print (Kd_yaw)
+        # print ("强化学习是否生效",robust.x_tao1)
+        if (depth_distance == "nan"):
+            depth_distance = 9.6
+        distance_pub.publish(depth_distance)
+        axis_pub.publish(u)
         if find_cnt - find_cnt_last == 0:
             if not get_time:
                 not_find_time = rospy.get_time()
                 get_time = True
-            if (rospy.get_time() - not_find_time > 3.0)or eval_distance =="nan":
+            # if (rospy.get_time() - not_find_time > 3.0)or eval_distance =="nan":
+            if (rospy.get_time() - not_find_time > 3.0):
                 twist.linear.x = 0.0
                 twist.linear.y = 0.0
                 cmd = "HOVER"
                 print(cmd)
                 
                 get_time = False
+
         find_cnt_last = find_cnt

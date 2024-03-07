@@ -44,10 +44,6 @@ parser.add_argument('--disable_double', action='store_false', default=True)
 parser.add_argument('--disable_dueling', action='store_false', default=False)
 args = parser.parse_args()
 
-
-
-
-
 if args.mode == 'train':
     os.makedirs(args.save_path, exist_ok=True)
 random.seed(args.seed)
@@ -81,7 +77,7 @@ out_dim = env.action_space.shape
 print(out_dim)
 reward_gamma = 0.99  # reward discount
 batch_size = 128  # batch size for sampling from replay buffer
-warm_start = batch_size*2  # sample times befor learning
+warm_start = batch_size*2  # sample times before learning
 noise_update_freq = 50 # how frequency param noise net update
 
 
@@ -129,7 +125,9 @@ class CNN(tl.models.Model):
 
     def __init__(self, name):
         super(CNN, self).__init__(name=name)
-        h, w, in_channels = in_dim
+        in_channels = in_dim
+        h = 128
+        w = 128
         dense_in_channels = 64 * ((h - 28) // 8) * ((w - 28) // 8)
         self.conv1 = tl.layers.Conv2d(
             32, (8, 8), (4, 4), tf.nn.relu, 'VALID', in_channels=in_channels, name='conv2d_1',
@@ -289,7 +287,7 @@ class DQN(object):
             @Observation -- {[distance, height]}, agent_loc and target_loc
         '''
         low_limits = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0])
-        high_limits = np.array([5.0, 1.0, 5.0, 4.9, 0.05, 0.01, 0.001, 0.001, 0.0001])
+        high_limits = np.array([10.0, 1.0, 5.0, 4.9, 2, 1, 0.5, 0.1, 0.1])
         eps = epsilon(self.niter)
         if args.mode == 'train':
             if random.random() < eps:       
@@ -297,7 +295,7 @@ class DQN(object):
                 # print (np.random.rand(*out_dim))
                 return np.random.uniform(low=low_limits,high=high_limits,size=(9,))
             obv = np.expand_dims(obv, 0).astype('float32') * ob_scale
-            print("obv : ",obv)
+            # print("obv : ",obv)
             if self.niter < explore_timesteps:
                 self.qnet.noise_scale = self.noise_scale
                 q_ptb = self._qvalues_func(obv).numpy()
@@ -356,23 +354,23 @@ class DQN(object):
                 target[0] = [2.0, 0.6, 2.0, 4.0, 0.05, 0.01, 0.0005, 0.01, 0.00002]
                 break
             res += target[0][i]/high_limits[i]
-        print("target:", target)
+        # print("target:", target)
         old_val = res
         target_vals = self.targetqnet(tf.constant(next_state[None], dtype=tf.float32)).numpy()
-        print("target_vals", target_vals)
+        # print("target_vals", target_vals)
         if done:
             res = reward
         else:
             res = reward + reward_gamma * np.max(target_vals[0])
 
         error = abs(old_val - res)
-        print(error)
+        # print(error)
         self.memory.add(error, (state, actions, reward, next_state, 1 if done else 0))   # save samples
 
     def train(self):
         mini_batch, idxs, is_weights = self.memory.sample(batch_size)
 
-        print("mini_batch:", mini_batch)
+        # print("mini_batch:", mini_batch)
         b_o = np.array([mini_batch[i][0] for i in range(batch_size)], dtype=np.float32)
         b_a = np.array([mini_batch[i][1] for i in range(batch_size)], dtype=np.float32)
         b_r = np.array([mini_batch[i][2] for i in range(batch_size)], dtype=np.float32)
@@ -386,7 +384,6 @@ class DQN(object):
         for i in range(batch_size):
             idx = idxs[i]
             self.memory.update(idx, tf_errors[i])
-
 
         self.niter += 1
         if self.niter % target_q_update_freq == 0:
@@ -420,16 +417,12 @@ class DQN(object):
         b_q = tf.reduce_sum(self.qnet(b_o) * b_a, 1)
         return b_q - (b_r + reward_gamma * b_q_)
 
-
-
-
-
 if __name__=='__main__':
     dqn = DQN()
-    rate = rospy.Rate(30)
+    rate = rospy.Rate(1)
     while not rospy.is_shutdown():
         if args.mode == 'train':
-            o,_ = env.reset() 
+            o,_ = env.reset()
             nepisode = 0
             t = time.time()
             #方式1：
@@ -495,4 +488,4 @@ if __name__=='__main__':
                         'episode reward: {:.4f}, episode length: {}'.format(i, nepisode, reward, length)
                     )
 
-            print(f'Successful episode: {suc_epi} / {nepisode}')        
+            print(f'Successful episode: {suc_epi} / {nepisode}')

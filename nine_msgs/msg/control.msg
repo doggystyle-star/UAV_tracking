@@ -1,9 +1,0 @@
-float64 x_tao1
-float64 x_tao2
-float64 y_tao1
-float64 y_tao2
-float64 z_tao1
-float64 z_tao2
-float64 Kp_yaw
-float64 Ki_yaw
-float64 Kd_yaw

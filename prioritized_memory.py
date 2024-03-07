@@ -14,7 +14,6 @@ class Memory:  # stored as ( s, a, r, s_ ) in SumTree
 
     def _get_priority(self, error):
         return (np.abs(error) + self.e) ** self.a
-
     def add(self, error, sample):
         p = self._get_priority(error)
         self.tree.add(p, sample)

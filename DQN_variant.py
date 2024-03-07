@@ -77,7 +77,9 @@ clipnorm = None
 
 
 in_dim = env.observation_space.shape
+print(in_dim)
 out_dim = env.action_space.n
+print(out_dim)
 reward_gamma = 0.99  # reward discount
 batch_size = 128  # batch size for sampling from replay buffer
 warm_start = batch_size*2  # sample times befor learning
@@ -360,13 +362,13 @@ class DQN(object):
             target[0][action] = reward + reward_gamma * np.max(target_val)
 
         error = abs(old_val - target[0][action])
-
+        print(error)
         self.memory.add(error, (state, action, reward, next_state, 1 if done else 0))   # save samples
 
 
     def train(self):
         mini_batch, idxs, is_weights = self.memory.sample(batch_size)
-
+        
         b_o = np.array([mini_batch[i][0] for i in range(batch_size)], dtype=np.float32)
         b_a = np.array([mini_batch[i][1] for i in range(batch_size)])
         b_r = np.array([mini_batch[i][2] for i in range(batch_size)], dtype=np.float32)
@@ -409,7 +411,8 @@ class DQN(object):
             b_q_ = (1 - b_d) * tf.reduce_sum(self.targetqnet(b_o_) * b_a_, 1)
         else:
             b_q_ = (1 - b_d) * tf.reduce_max(self.targetqnet(b_o_), 1)
-
+        print("b_o",b_o)
+        print("b_a",b_a)
         b_q = tf.reduce_sum(self.qnet(b_o) * tf.one_hot(b_a, out_dim), 1)
         return b_q - (b_r + reward_gamma * b_q_)
 
