@@ -46,11 +46,23 @@ class AccelerateController():
         acc = U
         V_out = VL + acc*dt
         #更新Sv和Su
-        Sv_1 = self.Sv - self.Et*(self.Sv + VL)*dt
+        Sv_1 = self.Sv - self.Et*(self.Sv - VL)*dt
         Su_1 = self.Su - self.Et*(self.Su + U)*dt
         self.Sv = Sv_1
         self.Su = Su_1
         return V_out
+    
+    # def update_Z(self,U_,dt,VL,PL):
+    #     delta_Ua = -1*self.Et*(self.Sv + VL) + self.Su
+    #     U = 9.8 - self.tao2*(self.tanh(VL + self.tao1*PL)+self.tanh(VL)) - self.sat(delta_Ua,U_)
+    #     acc = U - 9.8
+    #     V_out = VL + acc*dt
+    #     #更新Sv和Su
+    #     Sv_1 = self.Sv - self.Et*(self.Sv - VL)*dt
+    #     Su_1 = self.Su - self.Et*(self.Su + U - 9.8)*dt
+    #     self.Sv = Sv_1
+    #     self.Su = Su_1
+    #     return V_out
     
     def update_Z(self,U_,dt,VL,PL):
         delta_Ua = -1*self.Et*(self.Sv + VL) + self.Su
@@ -58,8 +70,8 @@ class AccelerateController():
         acc = U - 9.8
         V_out = VL + acc*dt
         #更新Sv和Su
-        Sv_1 = self.Sv - self.Et*(self.Sv + VL)*dt
-        Su_1 = self.Su - self.Et*(self.Su + U - 9.8)*dt
+        Sv_1 = self.Sv - self.Et*(self.Sv - VL)*dt
+        Su_1 = self.Su - self.Et*(self.Su + U - 9.8 )*dt
         self.Sv = Sv_1
         self.Su = Su_1
         return V_out

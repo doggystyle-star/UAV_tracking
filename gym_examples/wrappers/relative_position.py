@@ -14,5 +14,4 @@ class RelativePosition(gym.ObservationWrapper):
         height = np.expand_dims(obs["absolute_height"], axis=0) if np.isscalar(obs["absolute_height"]) else obs["absolute_height"]
         u_axis = np.expand_dims(obs["absolute_axis"], axis=0) if np.isscalar(obs["absolute_axis"]) else obs["absolute_axis"]
         return np.concatenate((distance, height, u_axis), axis=0) # (3,)
-        # return np.concatenate((obs["absolute_distance"], obs["absolute_height"]), axis=0)   # (3,)
 

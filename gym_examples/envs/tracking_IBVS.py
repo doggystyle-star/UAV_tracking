@@ -1,12 +1,15 @@
-import gym
-from gym import spaces
+''' 调试日志
+1. 适配版本
+1)change the acquirement depth_distancce 
+2)change the control method of IBVS
+'''
 import math
 import rospy
 import random
 import numpy as np
 import pyrealsense2 as rs
 from cv_bridge import CvBridge
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CameraInfo
 from pyquaternion import Quaternion
 from detection_msgs.msg import BoundingBoxes
 from std_msgs.msg import String,Header, Float32
@@ -19,6 +22,10 @@ sys.path.append("/home/robot/firmware/catkin_ws/devel/lib/python3/dist-packages"
 
 bridge = CvBridge()
 
+def camera_info_callback(msg):
+    global camera_info
+    camera_info = msg
+
 def color_img_callback(msg):
     global color_img
     color_img = bridge.imgmsg_to_cv2(msg, "bgr8")
@@ -28,49 +35,23 @@ def depth_img_callback(msg):
     depth_img = bridge.imgmsg_to_cv2(msg, "32FC1")
     depth_img = np.nan_to_num(depth_img)
 
-def detact_distance(box,randnum):
-    distance_list = []
-    mid_pos = [(box.xmin + box.xmax)//2, (box.ymin + box.ymax)//2] #确定索引深度的中心像素位置
-    min_val = min(abs(box.xmax - box.xmin), abs(box.ymax - box.ymin))#确定深度搜索范围
-    #print(box,)
-    for i in range(randnum):
-        bias = random.randint(-min_val//4, min_val//4)
-        dist = depth_img[int(mid_pos[1] + bias), int(mid_pos[0] + bias)]
-        # 绘制中心像素位置，仅用于调试
-        # cv2.circle(color_img (int(mid_pos[0] + bias), int(mid_pos[1] + bias)), 4, (255,0,0), -1)
-        if dist:
-            distance_list.append(dist)
-    distance_list = np.array(distance_list)
-    distance_list = np.sort(distance_list)[randnum//2-randnum//4:randnum//2+randnum//4] #Timsort排序+中值滤波
-    #print(distance_list, np.mean(distance_list))
+def detact_distance2(box):
+    mid_pos = [(box.xmin + box.xmax)//2, (box.ymin + box.ymax)//2] 
 
-    # 加权深度距离
-    raw_distance = round(np.mean(distance_list),4)
-    distance = abs(0.9*raw_distance + 0.01*target_distance*((43**2+105**2)/((box.xmin-box.xmax)//2**2+(box.ymin-box.ymax)//2**2))**(1/2))
-    return distance
+    fx = camera_info.K[0]
+    fy = camera_info.K[4]
+    cx = camera_info.K[2]
+    cy = camera_info.K[5]
 
-def get_depth_frame():
-    pipeline = rs.pipeline()
-    config = rs.config()
-    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-    pipeline.start(config)
+    depth = depth_img[mid_pos[1], mid_pos[0]]  
+    if depth > 0:  
+        point3d = np.array([(mid_pos[0] - cx) * depth / fx, (mid_pos[1] - cy) * depth / fy, depth])
+        print(f"像素坐标({mid_pos[0]}, {mid_pos[1]}) 对应的三维坐标为：{point3d}")  
 
-    # 创建对齐对象（深度对齐颜色）
-    align = rs.align(rs.stream.color)
-
-    try:
-        while True:
-            frames = pipeline.wait_for_frames()
-            
-            # 获取对齐帧集
-            aligned_frames = align.process(frames)
-            
-            # 获取对齐后的深度帧和彩色帧
-            aligned_depth_frame = aligned_frames.get_depth_frame()
-    except:
-        print('cant get picture')
-        return aligned_depth_frame
+    # # Weighted depth distance
+    # raw_distance = round(np.mean(distance_list),4)
+    # distance = abs(0.9*raw_distance + 0.01*target_distance*((43**2+105**2)/((box.xmin-box.xmax)//2**2+(box.ymin-box.ymax)//2**2))**(1/2))
+    return point3d
     
 def local_velocity_callback(msg):
     global twiststamped
@@ -83,40 +64,42 @@ def local_velocity_callback(msg):
     twiststamped.twist.angular.z = msg.twist.angular.z
     #print (twiststamped)
 def parameter_callback(msg):
-    global robust
-    robust.Kp_yaw = msg.Kp_yaw
-    robust.Ki_yaw = msg.Ki_yaw
-    robust.Kd_yaw = msg.Kd_yaw
-    robust.x_tao1 = msg.x_tao1
-    robust.x_tao2 = msg.x_tao2
-    robust.y_tao1 = msg.y_tao1
-    robust.y_tao2 = msg.y_tao2
-    robust.z_tao1 = msg.z_tao1
-    robust.z_tao2 = msg.z_tao2
+    global x_accelerate, y_accelerate, z_accelerate,z_angvelocity
+    Kp_yaw = msg.Kp_yaw
+    Ki_yaw = msg.Ki_yaw
+    Kd_yaw = msg.Kd_yaw
+    x_tao1 = msg.x_tao1
+    x_tao2 = msg.x_tao2
+    y_tao1 = msg.y_tao1
+    y_tao2 = msg.y_tao2
+    z_tao1 = msg.z_tao1
+    z_tao2 = msg.z_tao2
+    print("robust", robust)
+    '''tao1为-1'''
+    x_accelerate = AccelerateController(-x_tao1,x_tao2,ET)
+    y_accelerate = AccelerateController(y_tao1,y_tao2,ET)
+    z_accelerate = AccelerateController(z_tao1,z_tao2,ET)
+    z_angvelocity = PIDController(Kp_yaw,Ki_yaw,Kd_yaw)
 
-
-#返回z轴角速度和x加速度
 def darknet_callback(data):
     global find_cnt, cmd, get_time, eval_distance, twist, depth_distance,u
     for box in data.bounding_boxes:
         if(box.Class == "person" ):
         #if(box.id == 56 ):
             print("find human")
-            eval_distance = detact_distance(box,48)
-
-            # 加入虚拟相平面
-            # 计算cos(pitch_angle)
+            points = detact_distance2(box)
+            eval_distance = points[2]
+            # virtual phase plane
+            # calcualte: cos(pitch_angle)
             eval_distance = eval_distance * math.cos(pitch) + height * math.sin(pitch)
-            
             depth_distance = eval_distance 
             q_x = eval_distance - target_distance
-            print("深度距离为:",eval_distance)
             u = (box.xmax+box.xmin)/2
-            #print("中心像素距离为:",u - ppx)
             v = (box.ymax+box.ymin)/2
             twist.angular.z = z_angvelocity.update(ppx,u,Dt)
-            q_y = eval_distance*(u- ppx)/fx
-            q_z = eval_distance*(v - ppy)/fy
+
+            q_y = points[0]
+            q_z = points[1]
             #WL = twiststamped.twist.angular.z
             q_zz = height - target_height
             XVL=twiststamped.twist.linear.x
@@ -124,30 +107,13 @@ def darknet_callback(data):
             ZVL=twiststamped.twist.linear.z
             #print("x_velocity",VL,'\t')
             twist.linear.x = x_accelerate.update_X(U_=0.5,dt=dDt,VL=XVL,PL=q_x) 
-            twist.linear.y = y_accelerate.update_Y(U_=0.5,dt=dDt,VL=YVL,PL=q_y)#左手系
-            #print(twiststamped.twist.linear.x)
-            VZ = z_accelerate.update_Z(U_=0.5,dt=Dt,VL=ZVL,PL=q_zz)
-            if not (is_over):
-                if VZ == "nan":
-                    twist.linear.z = -0.02
-                elif (is_bottom): twist.linear.z = 0.02
+            twist.linear.y = y_accelerate.update_Y(U_=0.5,dt=dDt,VL=YVL,PL=q_y)#Left -hand
+            # Limiting
+            twist.linear.x = 0.5 if twist.linear.x > 0.5 else twist.linear.x 
+            twist.linear.x = -0.5 if twist.linear.x < -0.5 else twist.linear.x
+            twist.linear.y = 0.5 if twist.linear.y > 0.5 else twist.linear.y 
+            twist.linear.y = -0.5 if twist.linear.y < -0.5 else twist.linear.y
 
-                else:
-                    twist.linear.z = VZ
-            else:
-                twist.linear.z = -0.02
-            #录制bag包  
-            toast.twist.linear.x = u - ppx
-            toast.twist.linear.y = v - ppy
-            toast.twist.linear.z = q_x
-
-        else:
-            twist.linear.x = 0
-            twist.linear.y = 0
-            twist.linear.z = 0.02
-            #twist.angular.z = 0.5
-
-#返回z加速度
 def local_pose_callback(msg):
     global height, target_set, pitch, is_over, is_bottom
     is_over = False
@@ -158,39 +124,40 @@ def local_pose_callback(msg):
         is_over = True
     if height < 0.2:
         is_bottom = True
-    # print('高度为： ',height)
-    # print('pitch: ', pitch)
 
-# 返回俯仰角
 def q2pitch(q):
-    # 如果输入是 Quaternion 类型，则直接获取俯仰角
+    # if the type of input is Quaternion，directly get angle
     if isinstance(q, Quaternion):
         pitch_angle_rad = q.yaw_pitch_roll[1]
     else:
-        # 如果输入不是 Quaternion 类型，先将其转换为 Quaternion 类型
+        # firstly turn to type of Quaternion
         q_ = Quaternion(q.w, q.x, q.y, q.z)
-        # 获取俯仰角
+        # then get angle
         pitch_angle_rad = q_.yaw_pitch_roll[1]
     return pitch_angle_rad
 
 if __name__ == "__main__":
-
+    header = Header()
     cmd = String()
     twiststamped =TwistStamped()
+    Altitude = PoseStamped()
     twist = Twist()
     robust = control()
     toast = TwistStamped()
     depth_distance = Float32()
     u = Float32()
-    target_distance = 3
-    target_height = 0.6
-    #env = RelativePosition(env) 
+    target_distance = 3.8
+    target_height = 1
+    ET = 0.1
     ppx=318.482
     ppy=241.167
-    # fx = 384.39654541015625
-    # fy = 384.39654541015625
     fx = 616.591
     fy = 616.765
+
+    x_accelerate = AccelerateController(0,0,ET)
+    y_accelerate = AccelerateController(0,0,ET)
+    z_accelerate = AccelerateController(0,0,ET)
+    z_angvelocity = PIDController(0,0,0)
 
     target_set = True
     find_cnt_last = 0
@@ -217,6 +184,8 @@ if __name__ == "__main__":
 
     rospy.Subscriber("/iris_0/Gazeboworld/parameter_9", control,callback= parameter_callback, queue_size=1)
 
+    rospy.Subscriber("/iris_0/realsense/depth_camera/color/camera_info",CameraInfo, callback= camera_info_callback, queue_size=1)
+
     cmd_vel_pub = rospy.Publisher('/xtdrone/iris_0/cmd_vel_flu', Twist, queue_size=1)
     cmd_pub = rospy.Publisher('/xtdrone/iris_0/cmd', String, queue_size=1)
     error_pub = rospy.Publisher('/xtdrone/iris_0/cmd_error',TwistStamped,queue_size=1)
@@ -224,37 +193,22 @@ if __name__ == "__main__":
     distance_pub = rospy.Publisher('/iris_0/yolo/depth_distance', Float32, queue_size=1)
 
     axis_pub = rospy.Publisher('iris_0/yolo/axis_u', Float32, queue_size=1)
+
+    height_pub = rospy.Publisher('/iris_0/mavros/setpoint_raw/local', PoseStamped, queue_size=1)
     rate = rospy.Rate(30) 
 
-        #PID control
-    # Kp_yaw = -0.0005
-    # Ki_yaw = 0.01
-    # Kd_yaw = 0.00002
-    z_angvelocity = PIDController(robust.Kp_yaw,robust.Ki_yaw,robust.Kd_yaw)
-    #ACC control
-    ET = 0.1
-    # x_tao1 = 2
-    # x_tao2 = 0.6
-
-    # y_tao1 = 2
-    # y_tao2 = 4
-
-    # z_tao1 = 0.05
-    # z_tao2 = 0.01
-
-    x_accelerate = AccelerateController(robust.x_tao1,robust.x_tao2,ET)
-    y_accelerate = AccelerateController(robust.y_tao1,robust.y_tao2,ET)
-    z_accelerate = AccelerateController(robust.z_tao1,robust.z_tao2,ET)
-
-    header = Header()
     header.frame_id = "base_link"
+    Altitude.header = header
     while not rospy.is_shutdown():
-        rate.sleep()
+        Altitude.header.stamp = rospy.Time.now()  # Setting the timestamp
+        
+        Altitude.pose.position.z = 0.8
+        height_pub.publish(Altitude)
         cmd_vel_pub.publish(twist)
-        # print("twist_x:",twist.linear.x)
         cmd_pub.publish(cmd)           
         error_pub.publish(toast)
-        # print ("强化学习是否生效",robust.x_tao1)
+        rate.sleep()
+
         if (depth_distance == "nan"):
             depth_distance = 9.6
         distance_pub.publish(depth_distance)
@@ -263,7 +217,7 @@ if __name__ == "__main__":
             if not get_time:
                 not_find_time = rospy.get_time()
                 get_time = True
-            # if (rospy.get_time() - not_find_time > 3.0)or eval_distance =="nan":
+
             if (rospy.get_time() - not_find_time > 3.0):
                 twist.linear.x = 0.0
                 twist.linear.y = 0.0
@@ -271,5 +225,5 @@ if __name__ == "__main__":
                 print(cmd)
                 
                 get_time = False
-
+            cmd = ''
         find_cnt_last = find_cnt

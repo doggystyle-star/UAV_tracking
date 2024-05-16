@@ -1,30 +1,42 @@
+## This repository is based on Reinforcement Learning (DDPG), YOLOV5, Robust controller for UAV target tracking.
+
 ## Requirements
 Python 3.10  
 Tensorflow 2.14.0  
 tensorlayer 2.2.5  
-```
-python setup.py install
-```
 
 ## File description
 - gym_examples/: Custom Environment: The agent _(blue dot)_ navigates through both static  and dynamic obstacles _(black)_ to reach the goal _(green)_.
-- dqn_variants/: The folder that stores the model weights in each episode.
-- gym_examples/envs/grid_world.py: The detailed implementation of the env grid_world.
-- DQN_variant.py: Main file， enhancing DQN with APF for Accelerated Training.
-- prioritized_memory.py: Prioritized Experience Replay (PER) based on SumTree.
-- SumTree.py: Data structure utilized for sampling replay buffer based on TD-errors.
+- ddpg_model/: The folder that stores the model weights in each episode.
+- gym_examples/envs/gazebo_world.py: The detailed implementation of the env gazebo_world.
+- gym_examples/envs/multirotor_communication.py: Main file1, Start the communication of UAV and the env gazebo_world.
+- gym_examples/envs/tracking_IBVS.py: Main file2, the controller of the env gazebo_world.
+- DDPG_UAV.py: Main file3， enhancing DDPG with Robust Controller for Accelerated Training.
 
 ## Results
-"We demonstrate tricks to accelerate DQN convergence, emphasizing improved sampling from the replay buffer. For instance, we enhance successful episode ratios during exploration using **APF**. Meanwhile, **PER** prioritizes samples with higher TD-errors based on the SumTree, while avoiding overfitting caused by greedy strategy."
+"The DDPG algorithm is used for calcuating the parameter of robust controller, comeared to pure Reinforcement learning it is faster and using only cpu computing resources."
 
-**Run**  
-```
-python DQN_variant.py    # for training
-python DQN_variant.py --mode test --save_path /path/to/your/model      # for testing
-```
+### **Please refer to the installation environment of this [PX4_YOLO](https://github.com/doggystyle-star/PX4_yolov5)**
 
-After about 9000 episodes, the performance is shown as follows:
+## Start
+Modify some launch files
+* `cp -r gazeboworld/outdoor.launch* ~/PX4_Firmware/launch/ `
+* `cp -r gazeboworld/world_nightmare.world* ~/PX4_Firmware/Tools/sitl_gazebo/worlds/ `
+
+## Run
+  * `roslaunch px4 outdoor.launch    # world`
+  * `roslaunch yolov5_ros yolov5.launch    # find target`
+  * `python3 multirotor_communication.py iris 0   # for communication`
+  * `python3 multirotor_keboard_control.py iris 1 vel    # for control uav to move`
+  
+  * Close the file multirotor_keboard_control.py
+
+  * `python3 tracking_IBVS.py # for tracking`  
+  * `python3 DDPG_UAV.py    # for training`
+  * `python3 DDPG_UAV.py --mode test --save_path /path/to/your/model      # for testing`
+
+After about 700 episodes, the performance is shown as follows:
 
 <div align="center">
-  <img src="result.gif" alt="result" width="40%" height="40%" />
+  <img src="Robust_RL_test.gif" alt="result" width="50%" height="50%" />
 </div>
