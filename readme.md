@@ -1,5 +1,12 @@
 ## This repository is based on Reinforcement Learning (DDPG), YOLOV5, Robust controller for UAV target tracking.
 
+
+After about 700 episodes, the performance is shown as follows:
+
+<div align="center">
+  <img src="Robust_RL_test.gif" width="50%" height="50%" />
+</div>
+
 ## Requirements
 Python 3.10  
 Tensorflow 2.14.0  
@@ -34,9 +41,3 @@ Modify some launch files
   * `python3 tracking_IBVS.py # for tracking`  
   * `python3 DDPG_UAV.py    # for training`
   * `python3 DDPG_UAV.py --mode test --save_path /path/to/your/model      # for testing`
-
-After about 700 episodes, the performance is shown as follows:
-
-<div align="center">
-  <img src="Robust_RL_test.gif" alt="result" width="50%" height="50%" />
-</div>
