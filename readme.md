@@ -4,7 +4,7 @@
 After about 700 episodes, the performance is shown as follows:
 
 <div align="center">
-  <img src="Robust_RL_test.gif"/>
+  <img src="Robust_RL_test.gif" width = "75%" height="75%"/>
 </div>
 
 ## Requirements
